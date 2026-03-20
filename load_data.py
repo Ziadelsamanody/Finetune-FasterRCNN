@@ -1,6 +1,6 @@
 import torchvision
 import torch
-import torchvision.transforms as tranforms 
+import torchvision.transforms as transforms 
 from torchvision.datasets import VOCDetection
 from torch.utils.data import DataLoader, Dataset
 from dotenv import load_dotenv 
@@ -10,8 +10,9 @@ load_dotenv()
 
 data_path = os.environ.get('data_path')
 
+transform = [transforms.ToTensor()]
 class VocDetection(Dataset):
-    def __init__(self, root=data_path, image_set='train', transform= None):
+    def __init__(self, root=data_path, image_set='train', transform= transform):
         super().__init__()
         self.data = VOCDetection(root=root, year='2007', image_set=image_set,  download=False )
         self.transform = transform 
@@ -57,6 +58,7 @@ class VocDetection(Dataset):
         }
 
         return image, new_target
+    @staticmethod
     def collate_fn(batch):
         return tuple(zip(*batch)) # ([imgs], [targts])
     

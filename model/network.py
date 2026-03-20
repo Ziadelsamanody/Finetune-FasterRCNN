@@ -23,7 +23,7 @@ class FasterRCNN(nn.Module):
     def __init__(self,num_classes, image_size= (224,224)):
         super(FasterRCNN, self).__init__()
         resnet = resnet50(weights = ResNet50_Weights.DEFAULT)
-        self.backbone = nn.Sequential(list(resnet.children())[: -4])
+        self.backbone = nn.Sequential(*list(resnet.children())[: -4])
         self.rpn = RPN(in_channels=512, image_size=image_size)
         self.roi_pool_output_size = (7,7)
         self.detection_head = DetectionHead(in_channels=512, num_classes=num_classes)
