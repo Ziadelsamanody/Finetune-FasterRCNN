@@ -14,7 +14,7 @@ from utils.utils import (
 )
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.models.detection.image_list import ImageList
-
+from torchvision.utils import draw_bounding_boxes
 
 dataset = VocDetection()
 # First baseline Train in two steps: 
@@ -129,6 +129,21 @@ def train_rpn(epochs= 10):
         
         avg_loss = total_loss / (batch_idx + 1)
         print(f"Epoch {epoch+1} finished | Avg loss: {avg_loss:.4f}\n")
+
+
+
+def inference_rpn(model_path, image, device=device, score_threshold=0.5, 
+                  nms_iou_threshold=0.7):
+    rpn = RPN(in_channels=512, image_size=(224, 224))
+    rpn.load_state_dict(torch.load(model_path))
+    rpn.eval()
+    backbone = load_backbone()
+    backbone.eval()
+    with torch.no_grad():
+        features = backbone(image)
+        rpn_logits, rpn_deltas, rois, all_anchors = rpn(features,image)
+        scores = f.softmax(rpn_logits, dim=1)[:, 1].cpu() 
+    return scores, rois 
 
 if __name__ == '__main__':
     train_rpn()

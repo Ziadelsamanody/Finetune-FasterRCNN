@@ -160,30 +160,3 @@ def encode_propsals(anchors, gt_boxes):
     th = torch.log(gt_height / anchor_height)
     return torch.stack([tx,ty,tw,th], dim=1)
 
-
-
-def encode_propsals(anchors, gt_boxes):
-    # anchors = [xmin, ymin, xmax, ymax]
-    # gt_boxes = [xmin, ymin, xmax, ymax]
-    # return targets for regression (dx, dy, dw, dh)
-    ax, ay, ax2, ay2 = anchors.unbind(-1)
-    gx, gy, gx2, gy2 = gt_boxes.unbind(-1)
-    
-    # add it to pervent zero division 
-    anchor_width = torch.clamp(ax2 - ax, min=1e-5)
-    anchor_height = torch.clamp(ay2 - ay, min=1e-5)
-    gt_width = torch.clamp(gx2 - gx, min=1e-5)
-    gt_height = torch.clamp(gy2 - gy, min=1e-5)
-    
-    # first convert boxes to (ctr_x, ctr_y, w, h)
-    cx_anchor = ax + 0.5 * anchor_width 
-    cy_anchor = ay + 0.5 * anchor_height
-    cx_gt = gx + 0.5 * gt_width
-    cy_gt = gy + 0.5 * gt_height 
-
-    tx = (cx_gt - cx_anchor) / anchor_width
-    ty = (cy_gt - cy_anchor) / anchor_height
-    tw = torch.log(gt_width / anchor_width)
-    th = torch.log(gt_height / anchor_height)
-    
-    return torch.stack([tx, ty, tw, th], dim=1)
