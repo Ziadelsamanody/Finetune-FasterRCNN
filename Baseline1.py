@@ -15,13 +15,20 @@ from utils.utils import (
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.models.detection.image_list import ImageList
 from torchvision.utils import draw_bounding_boxes
-
+from PIL import Image
+import numpy as np 
 dataset = VocDetection()
+from torch_snippets import show
+from torchvision.transforms import transforms
 # First baseline Train in two steps: 
 #  train RPN  
 # Freeze RPN , Train Detection Head 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+default_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
 def load_backbone():
     resnet = resnet50(weights= ResNet50_Weights.DEFAULT)
     backbone = nn.Sequential(
@@ -132,18 +139,5 @@ def train_rpn(epochs= 10):
 
 
 
-def inference_rpn(model_path, image, device=device, score_threshold=0.5, 
-                  nms_iou_threshold=0.7):
-    rpn = RPN(in_channels=512, image_size=(224, 224))
-    rpn.load_state_dict(torch.load(model_path))
-    rpn.eval()
-    backbone = load_backbone()
-    backbone.eval()
-    with torch.no_grad():
-        features = backbone(image)
-        rpn_logits, rpn_deltas, rois, all_anchors = rpn(features,image)
-        scores = f.softmax(rpn_logits, dim=1)[:, 1].cpu() 
-    return scores, rois 
 
-if __name__ == '__main__':
-    train_rpn()
+
