@@ -1,5 +1,97 @@
+import matplotlib.pyplot as plt 
+import matplotlib.patches as patches 
+from PIL import Image
+import numpy as np 
 import torch 
-from torchvision.ops import box_iou 
+import math 
+import  torchvision.transforms as transform 
+from torchvision.ops import box_iou , box_convert#  vectorized version
+
+def parse_voc_target(target, device=None):
+    """Extract GT boxes + class names from a torchvision VOCDetection target.
+
+    Returns:
+        gt_boxes: FloatTensor of shape (M, 4) in (xmin, ymin, xmax, ymax)
+        gt_labels: list[str] length M (VOC class names)
+    """
+    if device is None:
+        device = "cpu"
+
+    ann = target["annotation"] if isinstance(target, dict) else target
+    objs = ann.get("object", [])
+    if isinstance(objs, dict):
+        objs = [objs]
+    if not objs:
+        return torch.zeros((0, 4), dtype=torch.float32, device=device), []
+
+    boxes = []
+    labels = []
+    for obj in objs:
+        bbox = obj["bndbox"]
+        xmin = float(bbox["xmin"])
+        ymin = float(bbox["ymin"])
+        xmax = float(bbox["xmax"])
+        ymax = float(bbox["ymax"])
+        boxes.append([xmin, ymin, xmax, ymax])
+        labels.append(obj["name"])
+
+    return torch.tensor(boxes, dtype=torch.float32, device=device), labels
+def visulize_image_with_gt(dataset, idx):
+    image, target = dataset[idx]
+
+    # Convert image to numpy array 
+    # chw -- > hwc
+    img_np = np.array(image.permute(1,2,0))
+    
+    fig, ax = plt.subplots(1, figsize=(12,9))
+    ax.imshow(img_np)
+
+    # draw gt boxes  target['annotations']
+    if isinstance(target, dict): 
+        annos = target['annotation']['object']
+        # Handle single object case (VOC returns dict instead of list)
+        if isinstance(annos, dict):
+            annos = [annos]
+    else : 
+        annos = target['annotation']['object']
+    
+    for anno in annos : 
+        bbox = anno['bndbox']
+        x, y, w, h = int(bbox['xmin']), int(bbox['ymin']), int(bbox['xmax']) - int(bbox['xmin']), int(bbox['ymax']) - int(bbox['ymin'])
+        label = anno['name']
+        # draw rectangle 
+        rect = patches.Rectangle((x,y), w, h, linewidth=2, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+        plt.text(x, y-10, label, fontsize=10, bbox=dict(facecolor='white', alpha= 0.5))
+    plt.axis('off')
+    plt.show()
+
+def iou(boxA, boxB):
+    # Get intersection coordinates (inner bounds)
+    xmin = max(boxA[0], boxB[0])
+    ymin = max(boxA[1], boxB[1])
+    xmax = min(boxA[2], boxB[2])
+    ymax = min(boxA[3], boxB[3])
+
+    # Calculate intersection area
+    width = max(0, xmax - xmin)
+    height = max(0, ymax - ymin)
+    intersection = width * height
+    
+    # Calculate individual box areas
+    area_a = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    area_b = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+    
+    # Calculate union and IoU
+    union = area_a + area_b - intersection
+    iou = intersection / union if union > 0 else 0
+    return iou 
+
+
+def transform(image, target):
+    image = transform.ToTensor(image)
+    return image, target 
+
 
 
 def assign_anchors_to_gt(anchors, gt_boxes, pos_iou_thesh=0.7, neg_iou_thres=0.3):
@@ -44,6 +136,30 @@ def subsample_labels(labels, num_samples=256, pos_fraction=0.5):
         disable_neg = neg_inds[p]
         labels[disable_neg] = -1
     return labels 
+
+
+def encode_propsals(anchors, gt_boxes):
+    # anchors = [xmin, ymin, xmax, ymax]
+    # gt_boxes = [xmin, ymin, xmax, ymax]
+    # return targets for regression (dx, dy, dw, dh)
+    ax, ay, ax2, ay2 = anchors.unbind(-1)
+    gx, gy, gx2, gy2 = gt_boxes.unbind(-1)
+    anchor_width = ax2 - ax
+    anchor_height = ay2 -ay
+    gt_width = gx2 - gx
+    gt_height = gy2 - gy
+    # first convert boxes to (ctr_x, ctr_y, w, h)
+    cx_anchor = ax + 0.5 * anchor_width 
+    cy_anchor = ay + 0.5 * anchor_height
+    cx_gt = gx + 0.5 * gt_width
+    cy_gt = gy + 0.5 * gt_height 
+
+    tx = (cx_gt - cx_anchor) / anchor_width
+    ty = (cy_gt - cy_anchor) / anchor_height
+    tw = torch.log(gt_width / anchor_width)
+    th = torch.log(gt_height / anchor_height)
+    return torch.stack([tx,ty,tw,th], dim=1)
+
 
 
 def encode_propsals(anchors, gt_boxes):

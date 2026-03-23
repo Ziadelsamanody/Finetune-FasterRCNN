@@ -10,9 +10,10 @@ load_dotenv()
 
 data_path = os.environ.get('data_path')
 
-# Default transform: convert PIL image to tensor
+
 default_transform = transforms.Compose([
-    transforms.ToTensor()
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
 ])
 class VocDetection(Dataset):
     def __init__(self, root=data_path, image_set='train', transform=default_transform):
