@@ -36,8 +36,9 @@ class FasterRCNN(nn.Module):
         N,C,H,W = x.shape 
         image_sizes = [(H,W)] * N 
         image_list = ImageList(x, image_sizes)
-        rpn_logits, rpn_box_detas , rois = self.rpn(backbone, image_list)
+        rpn_logits, rpn_box_deltas, rois, _ = self.rpn(backbone, image_list)
         pooled_rois = roi_pool(backbone, rois, self.roi_pool_output_size, self.spatial_scale)
         cls_score, bbox_preds = self.detection_head(pooled_rois)
 
         return cls_score, bbox_preds
+    

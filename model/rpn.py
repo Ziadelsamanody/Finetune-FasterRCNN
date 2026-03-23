@@ -4,8 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from torchvision.ops import roi_pool, nms, Conv2dNormActivation
 from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.models.detection.image_list import ImageList
 from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.image_list import ImageList
 
 
 class RPN(nn.Module):
@@ -24,26 +24,54 @@ class RPN(nn.Module):
             mid_channels, self.num_anchors *2 , kernel_size=1, stride=1)
         self.bbox_pred = nn.Conv2d(mid_channels, self.num_anchors *4 , kernel_size=1, stride=1)
 
-    def forward(self, feature_map, image_list, num_rois=200):
-        bsz, _, hh, ww = feature_map.shape 
+    def forward(self, feature_map, images, num_rois=200):
+        """Run RPN on a feature map.
+
+        Args:
+            feature_map: Tensor of shape [B, C, H, W].
+            images: ImageList or 4D tensor [B, C, H, W].
+        """
+
+        bsz, _, hh, ww = feature_map.shape
         x = F.relu(self.conv(feature_map))
-        rpn_logits = self.cls_logits(x).permute(0, 2, 3, 1).contiguous().view(bsz, -1, 2)
-        rpn_box_delta = self.bbox_pred(x).permute(0,2,3,1).contiguous().view(bsz, -1, 4)
+        rpn_logits = (
+            self.cls_logits(x)
+            .permute(0, 2, 3, 1)
+            .contiguous()
+            .view(bsz, -1, 2)
+        )
+        rpn_box_delta = (
+            self.bbox_pred(x)
+            .permute(0, 2, 3, 1)
+            .contiguous()
+            .view(bsz, -1, 4)
+        )
+
+        # Convert to ImageList if needed
+        if isinstance(images, ImageList):
+            image_list = images
+        else:
+            # Assume 4D tensor [B, C, H, W]
+            image_sizes = [tuple(images.shape[-2:]) for _ in range(images.size(0))]
+            image_list = ImageList(images, image_sizes)
 
         anchor_list = self.anchor_generator(image_list, [feature_map])
         all_rois = []
-        # convert proposal and select the best one 
+        
         for i in range(bsz):
             anchors = anchor_list[i]
-            proposal = self._generate_proposals(rpn_box_delta[i], anchors)
-            proposal =  self._select_rois(proposal, rpn_logits[i], num_rois)
-            proposal[:, 0] = i 
-            all_rois.append(proposal)
+            proposals = self._generate_proposals(rpn_box_delta[i], anchors)
+            proposals = self._select_rois(proposals, rpn_logits[i], num_rois)
+            all_rois.append(proposals)
 
-        rois =  torch.cat(proposal, dim=1)
-        # Stop Gradient from ROIS to logits and deltas 
+        # Concatenate proposals from all images in the batch.
+        if all_rois:
+            rois = torch.cat(all_rois, dim=0)
+        else:
+            rois = torch.zeros((0, 4), dtype=feature_map.dtype, device=feature_map.device)
+
         rois = rois.detach()
-        return rpn_logits, rpn_box_delta,  rois
+        return rpn_logits, rpn_box_delta, rois, anchor_list
     def _generate_proposals(self, rpn_box_delta, anchors) : 
         widths = anchors[:, 2] - anchors[:, 0]
         heights = anchors[:, 3] - anchors[:, 1]

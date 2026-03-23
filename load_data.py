@@ -10,9 +10,12 @@ load_dotenv()
 
 data_path = os.environ.get('data_path')
 
-transform = [transforms.ToTensor()]
+# Default transform: convert PIL image to tensor
+default_transform = transforms.Compose([
+    transforms.ToTensor()
+])
 class VocDetection(Dataset):
-    def __init__(self, root=data_path, image_set='train', transform= transform):
+    def __init__(self, root=data_path, image_set='train', transform=default_transform):
         super().__init__()
         self.data = VOCDetection(root=root, year='2007', image_set=image_set,  download=False )
         self.transform = transform 
@@ -23,13 +26,12 @@ class VocDetection(Dataset):
     'pottedplant','sheep','sofa','train','tvmonitor'
 ]
         self.class_to_idx = {clss:  idx + 1 for idx, clss in  enumerate(VOC_CLASSES)}
-        self.transform = transform
     def __len__(self):
         return len(self.data)
     def __getitem__(self, idx):
         image, target = self.data[idx]
         if self.transform is not None:
-            image = self.tranform(image)
+            image = self.transform(image)
         
         objs = target['annotation']['object']
         if not isinstance(objs, list):
