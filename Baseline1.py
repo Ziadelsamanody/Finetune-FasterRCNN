@@ -141,3 +141,11 @@ def train_rpn(epochs= 10):
 
 
 
+def trainFasterRCNN(model, rpn_path,  dataloader, device=device):
+    backbone = load_backbone().to(device)
+    model = FasterRCNN(num_classes=21).to(device)
+    model.rpn = model.load_state_dict(torch.load(rpn_path, map_location=device))
+    for p in model.rpn.parameters():
+        p.requires_grad =False
+
+    

@@ -42,3 +42,14 @@ class FasterRCNN(nn.Module):
 
         return cls_score, bbox_preds
     
+
+class FasterRCNNLoss(nn.Module):
+    def __init__(self):
+        super(FasterRCNNLoss, self).__init__()
+        self.cls_loss = nn.CrossEntropyLoss()
+        self.bbox_reg = nn.SmoothL1Loss()
+    def forward(self, cls_score, bbox_pred, labels, gt_boxes):
+        cls_losses = self.cls_loss(cls_score, labels)
+        reg_losses = self.bbox_reg(bbox_pred, gt_boxes)
+        total_loss = cls_losses + reg_losses
+        return cls_losses , reg_losses, total_loss
