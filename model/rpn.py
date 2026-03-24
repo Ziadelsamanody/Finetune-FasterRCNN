@@ -57,7 +57,7 @@ class RPN(nn.Module):
 
         anchor_list = self.anchor_generator(image_list, [feature_map])
         all_rois = []
-        
+        # convert proposal and select the best one 
         for i in range(bsz):
             anchors = anchor_list[i]
             proposals = self._generate_proposals(rpn_box_delta[i], anchors)
@@ -70,6 +70,7 @@ class RPN(nn.Module):
         else:
             rois = torch.zeros((0, 4), dtype=feature_map.dtype, device=feature_map.device)
 
+        # Stop gradients from flowing from ROIs back to logits/deltas
         rois = rois.detach()
         return rpn_logits, rpn_box_delta, rois, anchor_list
     def _generate_proposals(self, rpn_box_delta, anchors) : 
@@ -85,23 +86,20 @@ class RPN(nn.Module):
         pred_ctr_y = dy * heights + ctr_y
         pred_w = torch.exp(dw) * widths
         pred_h = torch.exp(dh) * heights
-        # converts format (center, width, hegiht) to (x1, y1, x2, y2)
+        # converts format (center, width, height) to (x1, y1, x2, y2)
         pred_boxes = torch.zeros_like(rpn_box_delta)
         pred_boxes[:, 0] = pred_ctr_x - 0.5 * (pred_w - 1.0)
-        pred_boxes[:, 1] = pred_ctr_y - 0.5 * (pred_h-1.0)
+        pred_boxes[:, 1] = pred_ctr_y - 0.5 * (pred_h - 1.0)
         pred_boxes[:, 2] = pred_ctr_x + 0.5 * (pred_w - 1.0)
         pred_boxes[:, 3] = pred_ctr_y + 0.5 * (pred_h - 1.0)
         # clip boxes to ensure boxes don't go outside the image
         pred_boxes[:, 0::2] = pred_boxes[:, 0::2].clamp(min=0, max=self.image_size[1] - 1)
-        pred_boxes[:, 1::2] = pred_boxes[:, 1::2].clamp(min=0, max= self.image_size[0] - 1)
+        pred_boxes[:, 1::2] = pred_boxes[:, 1::2].clamp(min=0, max=self.image_size[0] - 1)
 
-        batch_indices = torch.zeros((pred_boxes.size(0), 1), device=pred_boxes.device)
-        return torch.cat([batch_indices, pred_boxes], dim=1)
+        return pred_boxes
     
-    def _select_rois(self, proposals,logits, num_rois = 200, ious_threshold=0.7):
+    def _select_rois(self, proposals, logits, num_rois = 200, ious_threshold=0.7):
         scores = torch.softmax(logits, dim=1)[:, 1] # foreground scores 
-        #remove batch size 
-        proposals = proposals[:, 1:5] 
         keep = nms(proposals, scores, ious_threshold)
         keep = keep[: num_rois]
         return proposals[keep]

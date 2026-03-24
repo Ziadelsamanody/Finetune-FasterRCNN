@@ -22,6 +22,7 @@ class DetectionHead(nn.Module):
 class FasterRCNN(nn.Module):
     def __init__(self,num_classes, image_size= (224,224)):
         super(FasterRCNN, self).__init__()
+        self.num_classes = num_classes
         resnet = resnet50(weights = ResNet50_Weights.DEFAULT)
         self.backbone = nn.Sequential(*list(resnet.children())[: -4])
         self.rpn = RPN(in_channels=512, image_size=image_size)
@@ -39,11 +40,19 @@ class FasterRCNN(nn.Module):
         rpn_logits, rpn_box_deltas, rois, _ = self.rpn(backbone, image_list)
         
         # Add batch indices to rois: [M, 4] -> [M, 5]
-        batch_indices = torch.zeros((rois.size(0), 1), dtype=rois.dtype, device=rois.device)
-        rois_with_batch = torch.cat([batch_indices, rois], dim=1)
-        
-        pooled_rois = roi_pool(backbone, rois_with_batch, self.roi_pool_output_size, self.spatial_scale)
-        cls_score, bbox_preds = self.detection_head(pooled_rois)
+        # rois from RPN are already grouped by image, compute batch indices
+        if rois.size(0) > 0:
+            # For now, assume all proposals come from first image (batch_idx=0)
+            # In full implementation, would need to track which proposals come from which image
+            batch_indices = torch.zeros((rois.size(0), 1), dtype=rois.dtype, device=rois.device)
+            rois_with_batch = torch.cat([batch_indices, rois], dim=1)
+            
+            pooled_rois = roi_pool(backbone, rois_with_batch, self.roi_pool_output_size, self.spatial_scale)
+            cls_score, bbox_preds = self.detection_head(pooled_rois)
+        else:
+            # No proposals, return empty tensors
+            cls_score = torch.zeros((0, self.num_classes), device=x.device)
+            bbox_preds = torch.zeros((0, self.num_classes * 4), device=x.device)
 
         return cls_score, bbox_preds, rois
     
@@ -77,6 +86,9 @@ class FasterRCNNLoss(nn.Module):
         # Create proposal labels (0 = background)
         proposal_labels = torch.zeros(num_proposals, dtype=torch.long, device=cls_score.device)
         
+        # Store GT indices for bbox matching
+        proposal_gt_idxs = torch.zeros(num_proposals, dtype=torch.long, device=cls_score.device)
+        
         if num_gt > 0:
             # Compute IoU between proposals and GT boxes
             ious = box_iou(proposals, gt_boxes)  # [num_proposals, num_gt]
@@ -85,9 +97,10 @@ class FasterRCNNLoss(nn.Module):
             # Assign labels: positive if IoU > threshold, negative if < threshold
             pos_mask = max_ious > self.pos_iou_threshold
             proposal_labels[pos_mask] = gt_labels[max_gt_idx[pos_mask]]
+            proposal_gt_idxs = max_gt_idx
             
             # Negative labels stay as 0 (background)
-            # Proposals with IoU between thresholds are ignored (-1, but we use 0 for simplicity)
+            # Proposals with IoU between thresholds are ignored
         
         # Classification loss
         cls_loss = self.cls_loss_fn(cls_score, proposal_labels)
@@ -96,14 +109,50 @@ class FasterRCNNLoss(nn.Module):
         num_pos = (proposal_labels > 0).sum().item()
         if num_pos > 0:
             pos_mask = proposal_labels > 0
+            pos_proposals = proposals[pos_mask]
             pos_bbox_pred = bbox_pred[pos_mask]
-            # For positive proposals, create dummy regression targets
-            # In full implementation, would encode GT boxes relative to proposals
-            target_size = pos_bbox_pred.size(0) * pos_bbox_pred.size(1)
-            pos_targets = torch.zeros_like(pos_bbox_pred)
-            reg_loss = self.bbox_reg(pos_bbox_pred, pos_targets)
+            pos_gt_boxes = gt_boxes[proposal_gt_idxs[pos_mask]]
+            
+            # Encode GT boxes relative to proposals
+            target_deltas = self._encode_boxes(pos_proposals, pos_gt_boxes)
+            
+            # Use only first 4 values of bbox_pred (class 0/background doesn't matter for now)
+            pos_bbox_pred_4 = pos_bbox_pred[:, :4]
+            reg_loss = self.bbox_reg(pos_bbox_pred_4, target_deltas)
         else:
             reg_loss = torch.tensor(0.0, device=cls_score.device, requires_grad=True)
         
         total_loss = cls_loss + reg_loss
         return cls_loss, reg_loss, total_loss
+    
+    def _encode_boxes(self, proposals, gt_boxes):
+        """Encode GT boxes relative to proposals.
+        
+        Args:
+            proposals: [N, 4] in format (x1, y1, x2, y2)
+            gt_boxes: [N, 4] in format (x1, y1, x2, y2)
+            
+        Returns:
+            deltas: [N, 4] in format (dx, dy, dw, dh)
+        """
+        # Convert to (cx, cy, w, h)
+        px, py, px2, py2 = proposals.unbind(-1)
+        gx, gy, gx2, gy2 = gt_boxes.unbind(-1)
+        
+        pw = px2 - px
+        ph = py2 - py
+        pcx = px + 0.5 * pw
+        pcy = py + 0.5 * ph
+        
+        gw = gx2 - gx
+        gh = gy2 - gy
+        gcx = gx + 0.5 * gw
+        gcy = gy + 0.5 * gh
+        
+        # Compute deltas
+        dx = (gcx - pcx) / (pw + 1e-8)
+        dy = (gcy - pcy) / (ph + 1e-8)
+        dw = torch.log(gw / (pw + 1e-8) + 1e-8)
+        dh = torch.log(gh / (ph + 1e-8) + 1e-8)
+        
+        return torch.stack([dx, dy, dw, dh], dim=1)

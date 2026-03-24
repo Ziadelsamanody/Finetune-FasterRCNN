@@ -37,14 +37,14 @@ dataloader = DataLoader(
         collate_fn=dataset.collate_fn,
         pin_memory=True 
     )
-# def load_backbone():
-#     resnet = resnet50(weights= ResNet50_Weights.DEFAULT)
-#     backbone = nn.Sequential(
-#         *list(resnet.children())[:-4]
-#     )
-#     for p in backbone.parameters():
-#         p.requires_grad = False
-#     return backbone
+def load_backbone():
+    resnet = resnet50(weights= ResNet50_Weights.DEFAULT)
+    backbone = nn.Sequential(
+        *list(resnet.children())[:-4]
+    )
+    for p in backbone.parameters():
+        p.requires_grad = False
+    return backbone
 
 def compute_rpn_loss(rpn_logits, rpn_deltas, anchor_list, targets, device=device):
     cls_loss = 0.0
@@ -134,10 +134,11 @@ def train_rpn(epochs= 10):
                   f'cls: [{loss_dict['loss_rpn_cls'].item() : .4f}] |'
                   f'box : [{loss_dict['loss_rpn_delta'].item() : .4f}] |'
                   f'total : [{loss.item()}]')
-            torch.save(rpn.state_dict(), "rpn_trained_stage1.pth")
         
         avg_loss = total_loss / (batch_idx + 1)
         print(f"Epoch {epoch+1} finished | Avg loss: {avg_loss:.4f}\n")
+    
+    return rpn
 
 
 
@@ -162,38 +163,46 @@ def trainFasterRCNN(criterion, rpn_path, epochs=10, dataloader=dataloader, devic
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
-        for batch_idx, (image, targets) in enumerate(dataloader):
+        for batch_idx, (images, targets) in enumerate(dataloader):
             # Stack images if they come as a tuple from collate_fn
-            if isinstance(image, (list, tuple)):
-                image = torch.stack(image)
-            image = image.to(device)
+            if isinstance(images, (list, tuple)):
+                images = torch.stack(images)
+            images = images.to(device)
             
-            # Handle targets: collate_fn returns tuple of dicts, stack labels and boxes
-            if isinstance(targets, (list, tuple)):
-                labels = torch.cat([t['labels'] for t in targets]).to(device)
-                boxes = torch.cat([t['boxes'] for t in targets]).to(device)
+            # Get GT boxes and labels from first image in batch
+            # (Note: In full implementation, should handle batch properly)
+            if isinstance(targets, (list, tuple)) and len(targets) > 0:
+                gt_labels = targets[0]['labels'].to(device)
+                gt_boxes = targets[0]['boxes'].to(device)
             else:
-                labels = targets['labels'].to(device)
-                boxes = targets['boxes'].to(device)
+                gt_labels = targets['labels'].to(device)
+                gt_boxes = targets['boxes'].to(device)
 
-            cls_score, bbox_pred, proposals = model(image)
+            cls_score, bbox_pred, proposals = model(images)
             
-
-            cls_loss, reg_loss, total_losses = criterion(cls_score, bbox_pred, proposals, labels, boxes)
-            total_loss += total_losses.item()
-        
-            optimizer.zero_grad()
-            total_losses.backward()
-            optimizer.step()
+            # Only compute loss if we have proposals and GT boxes
+            if len(proposals) > 0 and len(gt_boxes) > 0:
+                cls_loss, reg_loss, total_losses = criterion(cls_score, bbox_pred, proposals, gt_labels, gt_boxes)
+                total_loss += total_losses.item()
             
-            print(f'Epoch [{epoch+1}/{epochs}] Batch [{batch_idx}] '
-                  f'cls_loss: {cls_loss.item():.4f} reg_loss: {reg_loss.item():.4f} '
-                  f'total_loss: {total_losses.item():.4f}')
+                optimizer.zero_grad()
+                total_losses.backward()
+                optimizer.step()
+                
+                if (batch_idx + 1) % 5 == 0:
+                    print(f'Epoch [{epoch+1}/{epochs}] Batch [{batch_idx+1}] '
+                          f'cls_loss: {cls_loss.item():.4f} reg_loss: {reg_loss.item():.4f} '
+                          f'total_loss: {total_losses.item():.4f}')
         
         avg_loss = total_loss / (batch_idx + 1)
         print(f"Epoch {epoch+1} finished | Avg loss: {avg_loss:.4f}\n")
         torch.save(model.state_dict(), "faster_rcnn_trained.pth")
 if __name__ == '__main__':
-    rpn_path = 'rpn_trained_stage1.pth'
+    # Step 1: Train RPN (if not already done or want to retrain)
+    trained_rpn = train_rpn(epochs=10)  # ~30-60 min on GPU
+    torch.save(trained_rpn.state_dict(), 'rpn_trained_stage1.pth')
+    
+    # Step 2: Train Faster RCNN (freeze backbone + RPN)
     criterion = FasterRCNNLoss()
-    trainFasterRCNN(criterion, rpn_path)
+    trainFasterRCNN(criterion, 'rpn_trained_stage1.pth', epochs=10)
+    # Saves to 'faster_rcnn_trained.pth'
